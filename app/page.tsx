@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { loadFaceModels, getDescriptorFromVideo, detectFaceInVideo } from '@/lib/face-api-client';
-import { matchFace } from '@/lib/supabase';
 
 export default function LandingPage() {
   const router = useRouter();
@@ -88,17 +87,35 @@ export default function LandingPage() {
     setVerifying(true);
     setError(null);
     try {
-      const descriptor = await getDescriptorFromVideo(video);
-      if (!descriptor) {
+      const raw = await getDescriptorFromVideo(video);
+      if (!raw || raw.length !== 128) {
         setError('No face in frame. Look at the camera and try again.');
         return;
       }
-      const matches = await matchFace(descriptor, 0.6, 1);
-      if (matches.length > 0) {
-        router.push('/valentine');
+      const descriptor = raw as number[];
+      const allFinite = descriptor.every((v) => typeof v === 'number' && Number.isFinite(v) && !Number.isNaN(v));
+      if (!allFinite) {
+        setError('Face detection failed. Try again.');
         return;
       }
-      setError("We couldn't match your face. Try again in good light.");
+      const res = await fetch('/api/verify-face', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ descriptor }),
+      });
+      const data = (await res.json()) as {
+        match?: boolean;
+        bestSimilarity?: number;
+        error?: string;
+        detail?: string;
+      };
+      if (!res.ok) throw new Error(data?.error || data?.detail || 'Verification failed');
+      if (typeof window !== 'undefined') console.log('[VERIFY] server says:', data);
+      if (data.match !== true) {
+        setError("We couldn't match your face. Try again in good light.");
+        return;
+      }
+      router.push('/valentine');
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
       const supabaseMsg = e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : message;
